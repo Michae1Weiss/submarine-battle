@@ -4,3 +4,30 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui"] }
+
+[package.metadata.bevy_cli.web]
+default-features = false
+features = ["bevy/webgl2"]
+
+[lints.clippy]
+type_complexity = "allow"
+too_many_arguments = "allow"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = "symbols"
+panic = "abort"
+opt-level = "z"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+strip = "debuginfo"
