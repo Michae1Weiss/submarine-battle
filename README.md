@@ -16,6 +16,8 @@ Low-poly U-boat shooting PoC made with [Bevy](https://bevy.org) 0.19. Sink the g
 
 Click the game window once so it gets keyboard focus.
 
+On phones and tablets on-screen buttons appear for the same actions (best in landscape). You can steer and fire at the same time.
+
 ## Run
 ```bash
 cargo run

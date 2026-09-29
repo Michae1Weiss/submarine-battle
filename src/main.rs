@@ -3,7 +3,9 @@
 //! C centres it), arrows turn and elevate the gun (the red disc marks where a shell lands),
 //! SPACE = shell (3 hits kill, surfaced only), T = torpedo (1 hit kills, also when dived),
 //! F dive to periscope depth, R = restart. Third-person camera behind the boat.
+//! Touch devices get on-screen buttons for the same actions.
 
+use std::collections::HashSet;
 use std::f32::consts::TAU;
 
 use bevy::light::NotShadowCaster;
@@ -46,10 +48,13 @@ fn main() -> AppExit {
         }))
         .insert_resource(ClearColor(Color::srgb(0.10, 0.45, 0.62)))
         .insert_resource(GlobalAmbientLight { color: Color::srgb(0.85, 0.92, 1.0), brightness: 600.0, ..default() })
+        .insert_resource(Touch { on: is_touch_device(), ..default() })
+        .init_resource::<Controls>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (drive, fire, marker, fly, trail, explode, animate, follow, wake, bubbles, restart, hud).chain(),
+            (read_input, drive, fire, marker, fly, trail, explode, animate, follow, wake, bubbles, restart, hud, touch_ui)
+                .chain(),
         )
         .run()
 }
@@ -234,6 +239,7 @@ fn setup(
             ..default()
         }),
     });
+    spawn_touch_ui(&mut commands);
     spawn_round(&mut commands, &assets);
 }
 
@@ -283,30 +289,114 @@ fn find_torpedo_prop(ready: On<WorldInstanceReady>, children: Query<&Children>, 
     }
 }
 
-fn axis(keys: &ButtonInput<KeyCode>, plus: KeyCode, minus: KeyCode) -> f32 {
-    keys.pressed(plus) as i32 as f32 - keys.pressed(minus) as i32 as f32
+/// What the player wants this frame, from keyboard, mouse or touch buttons.
+#[derive(Resource, Default)]
+struct Controls {
+    faster: bool,
+    slower: bool,
+    rudder: f32, // +1 left
+    centre: bool,
+    gun_yaw: f32, // +1 left
+    gun_pitch: f32,
+    shell: bool,
+    torpedo: bool,
+    dive: bool,
+    restart: bool,
 }
 
-fn drive(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, player: Single<(&mut Player, &mut Transform)>) {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Action {
+    Faster,
+    Slower,
+    RudderLeft,
+    RudderRight,
+    Centre,
+    GunLeft,
+    GunRight,
+    GunUp,
+    GunDown,
+    Shell,
+    Torpedo,
+    Dive,
+    Restart,
+}
+
+/// On-screen buttons: `on` once the device has a touchscreen; `held` and `tapped` come from presses.
+#[derive(Resource, Default)]
+struct Touch {
+    on: bool,
+    held: HashSet<Action>,
+    tapped: HashSet<Action>,
+}
+
+#[derive(Component)]
+struct TouchRoot;
+
+#[derive(Component)]
+struct TouchButton(Action);
+
+#[cfg(target_arch = "wasm32")]
+fn is_touch_device() -> bool {
+    web_sys::window().is_some_and(|w| w.navigator().max_touch_points() > 0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_touch_device() -> bool {
+    false
+}
+
+fn read_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
+    mut touch: ResMut<Touch>,
+    mut c: ResMut<Controls>,
+) {
+    let fingers = touches.iter().next().is_some();
+    if fingers {
+        touch.on = true;
+    }
+    if !fingers && !mouse.pressed(MouseButton::Left) {
+        touch.held.clear(); // a lost release must never leave a button stuck
+    }
+    let held = |a| touch.held.contains(&a) as i32 as f32;
+    let tap = |a| touch.tapped.contains(&a);
+    let key = |k| keys.pressed(k) as i32 as f32;
+    *c = Controls {
+        faster: keys.just_pressed(KeyCode::KeyW) || tap(Action::Faster),
+        slower: keys.just_pressed(KeyCode::KeyS) || tap(Action::Slower),
+        rudder: (key(KeyCode::KeyA) - key(KeyCode::KeyD) + held(Action::RudderLeft) - held(Action::RudderRight)).clamp(-1.0, 1.0),
+        centre: keys.just_pressed(KeyCode::KeyC) || tap(Action::Centre),
+        gun_yaw: (key(KeyCode::ArrowLeft) - key(KeyCode::ArrowRight) + held(Action::GunLeft) - held(Action::GunRight)).clamp(-1.0, 1.0),
+        gun_pitch: (key(KeyCode::ArrowUp) - key(KeyCode::ArrowDown) + held(Action::GunUp) - held(Action::GunDown)).clamp(-1.0, 1.0),
+        shell: keys.pressed(KeyCode::Space) || mouse.pressed(MouseButton::Left) || held(Action::Shell) > 0.0 || tap(Action::Shell),
+        torpedo: keys.just_pressed(KeyCode::KeyT) || mouse.just_pressed(MouseButton::Right) || tap(Action::Torpedo),
+        dive: keys.just_pressed(KeyCode::KeyF) || tap(Action::Dive),
+        restart: keys.just_pressed(KeyCode::KeyR) || tap(Action::Restart),
+    };
+    touch.tapped.clear();
+}
+
+fn drive(c: Res<Controls>, time: Res<Time>, player: Single<(&mut Player, &mut Transform)>) {
     let dt = time.delta_secs();
     let (mut p, mut tf) = player.into_inner();
-    if keys.just_pressed(KeyCode::KeyW) {
+    if c.faster {
         p.throttle = (p.throttle + 1).min(THROTTLE.len() - 1);
     }
-    if keys.just_pressed(KeyCode::KeyS) {
+    if c.slower {
         p.throttle = p.throttle.saturating_sub(1);
     }
     let dive_factor = if p.dived { 0.7 } else { 1.0 };
     let want = THROTTLE[p.throttle].1 * dive_factor;
     p.speed += (want - p.speed) * (0.8 * dt).min(1.0);
-    p.rudder = (p.rudder + axis(&keys, KeyCode::KeyA, KeyCode::KeyD) * dt).clamp(-1.0, 1.0);
-    if keys.just_pressed(KeyCode::KeyC) {
+    p.rudder = (p.rudder + c.rudder * dt).clamp(-1.0, 1.0);
+    if c.centre {
         p.rudder = 0.0;
     }
     p.yaw += p.rudder * 0.3 * p.speed * dt; // the rudder only bites while moving
-    p.gun_yaw += axis(&keys, KeyCode::ArrowLeft, KeyCode::ArrowRight) * dt;
-    p.gun_pitch = (p.gun_pitch + axis(&keys, KeyCode::ArrowUp, KeyCode::ArrowDown) * 0.5 * dt).clamp(-0.1, 0.8);
-    if keys.just_pressed(KeyCode::KeyF) {
+    p.gun_yaw += c.gun_yaw * dt;
+    p.gun_pitch = (p.gun_pitch + c.gun_pitch * 0.5 * dt).clamp(-0.1, 0.8);
+    if c.dive {
         p.dived = !p.dived;
     }
     let target = if p.dived { 1.0 } else { 0.0 };
@@ -337,20 +427,19 @@ fn muzzle(p: &Player, tf: &Transform) -> (Vec3, Vec3) {
 }
 
 fn fire(
-    mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    c: Res<Controls>,
     player: Single<(&mut Player, &Transform)>,
     mut commands: Commands,
     assets: Res<AssetServer>,
 ) {
     let (mut p, tf) = player.into_inner();
-    if !p.dived && (keys.pressed(KeyCode::Space) || mouse.pressed(MouseButton::Left)) && p.shell_cd <= 0.0 {
+    if !p.dived && c.shell && p.shell_cd <= 0.0 {
         p.shell_cd = 0.6;
         p.kick = 1.0;
         let (at, dir) = muzzle(&p, tf);
         shoot(&mut commands, &assets, "shell", at, Projectile { vel: dir * SHELL_SPEED, gravity: GRAVITY, ramp: 0.0, age: 0.0, life: 5.0, damage: 1 });
     }
-    if (keys.just_pressed(KeyCode::KeyT) || mouse.just_pressed(MouseButton::Right)) && p.torpedo_cd <= 0.0 {
+    if c.torpedo && p.torpedo_cd <= 0.0 {
         p.torpedo_cd = 2.0;
         let forward = Quat::from_rotation_y(p.yaw) * Vec3::X;
         let at = Vec3::new(tf.translation.x, TORPEDO_DEPTH, tf.translation.z) + forward * 0.9;
@@ -456,7 +545,8 @@ fn animate(player: Single<&Player>, time: Res<Time>, mut parts: Query<(&Part, &R
             Part::Gun => tf.rotation = Quat::from_rotation_y(player.gun_yaw),
             Part::Barrel => tf.rotation = Quat::from_rotation_z(player.gun_pitch),
             Part::Recoil => tf.translation = rest.0 - Vec3::X * 0.06 * player.kick * player.kick,
-            Part::Periscope => tf.translation = rest.0 + Vec3::Y * 0.22 * player.depth,
+            // Retracted into the tower when surfaced, sticking out above the water when dived.
+            Part::Periscope => tf.translation = rest.0 + Vec3::Y * 0.3 * (player.depth - 1.0),
             Part::Propeller => tf.rotation = Quat::from_rotation_x(player.prop),
             Part::Rudder => tf.rotation = Quat::from_rotation_y(-player.rudder * 0.5),
             Part::Cloth(i) => tf.rotation = Quat::from_rotation_y((t * 7.0 - *i as f32 * 1.3).sin() * (0.16 + 0.05 * *i as f32)),
@@ -513,8 +603,8 @@ fn bubbles(time: Res<Time>, mut commands: Commands, mut all: Query<(Entity, &mut
     }
 }
 
-fn restart(keys: Res<ButtonInput<KeyCode>>, round: Query<Entity, With<Round>>, mut commands: Commands, assets: Res<AssetServer>) {
-    if keys.just_pressed(KeyCode::KeyR) {
+fn restart(c: Res<Controls>, round: Query<Entity, With<Round>>, mut commands: Commands, assets: Res<AssetServer>) {
+    if c.restart {
         for e in &round {
             commands.entity(e).despawn();
         }
@@ -522,22 +612,121 @@ fn restart(keys: Res<ButtonInput<KeyCode>>, round: Query<Entity, With<Round>>, m
     }
 }
 
-fn hud(player: Query<&Player>, enemies: Query<&Enemy>, mut text: Single<&mut Text, With<Hud>>) {
+fn hud(
+    player: Query<&Player>,
+    enemies: Query<&Enemy>,
+    touch: Res<Touch>,
+    window: Single<&Window>,
+    mut text: Single<&mut Text, With<Hud>>,
+) {
     let left = enemies.iter().count();
     let (throttle, rudder, dived) = player
         .single()
         .map_or(("", 0.0, false), |p| (THROTTLE[p.throttle].0, p.rudder, p.dived));
     let status = if left == 0 {
-        "ALL SUNK! R = play again".to_string()
+        if touch.on { "ALL SUNK! Tap RESTART" } else { "ALL SUNK! R = play again" }
     } else if dived {
-        "PERISCOPE DEPTH: torpedoes only (F = surface)".to_string()
+        "PERISCOPE DEPTH: torpedoes only"
     } else {
-        "surfaced".to_string()
+        "surfaced"
     };
     let side = if rudder < -0.05 { "R" } else if rudder > 0.05 { "L" } else { "-" };
+    let help = match (touch.on, window.width() < window.height()) {
+        (true, true) => "Rotate your device to landscape\n",
+        (true, false) => "",
+        _ => "W/S engine  A/D rudder (C centre)  arrows gun  SPACE shell  T torpedo  F dive  R restart\n",
+    };
     text.0 = format!(
-        "W/S engine  A/D rudder (C centre)  arrows gun  SPACE shell  T torpedo  F dive  R restart\n\
-         Enemies: {left}   Engine: {throttle}   Rudder: {side} {:.0}%   {status}",
+        "{help}Enemies: {left}   Engine: {throttle}   Rudder: {side} {:.0}%   {status}",
         rudder.abs() * 100.0
     );
+}
+
+fn touch_button(row: &mut ChildSpawnerCommands, label: &str, action: Action) {
+    row.spawn((
+        TouchButton(action),
+        Node {
+            width: Val::VMin(16.0),
+            height: Val::VMin(11.0),
+            margin: UiRect::all(Val::Px(3.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+    ))
+    .with_child((Text::new(label), TextFont::from_font_size(15.0), TextColor(Color::WHITE)))
+    .observe(move |_: On<Pointer<Press>>, mut touch: ResMut<Touch>| {
+        touch.held.insert(action);
+        touch.tapped.insert(action);
+    })
+    .observe(move |_: On<Pointer<Release>>, mut touch: ResMut<Touch>| {
+        touch.held.remove(&action);
+    })
+    .observe(move |_: On<Pointer<Out>>, mut touch: ResMut<Touch>| {
+        touch.held.remove(&action);
+    });
+}
+
+/// A captioned column of button rows.
+fn touch_panel(root: &mut ChildSpawnerCommands, rows: &[(&str, &[(&str, Action)])]) {
+    root.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }).with_children(|panel| {
+        for (caption, buttons) in rows {
+            panel.spawn((Text::new(*caption), TextFont::from_font_size(12.0), TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8))));
+            panel
+                .spawn(Node { flex_direction: FlexDirection::Row, ..default() })
+                .with_children(|row| {
+                    for (label, action) in *buttons {
+                        touch_button(row, label, *action);
+                    }
+                });
+        }
+    });
+}
+
+fn spawn_touch_ui(commands: &mut Commands) {
+    use Action::*;
+    commands
+        .spawn((
+            TouchRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                display: Display::None,
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::FlexEnd,
+                padding: UiRect::all(Val::Px(10.0)),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
+        .with_children(|root| {
+            touch_panel(root, &[("ENGINE", &[("-", Slower), ("+", Faster)]), ("RUDDER", &[("<", RudderLeft), ("C", Centre), (">", RudderRight)])]);
+            touch_panel(root, &[("", &[("SHELL", Shell), ("TORPEDO", Torpedo), ("DIVE", Dive)]), ("GUN", &[("<", GunLeft), ("^", GunUp), ("v", GunDown), (">", GunRight)])]);
+            root.spawn((
+                TouchButton(Restart),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(10.0),
+                    right: Val::Px(10.0),
+                    padding: UiRect::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+            ))
+            .with_child((Text::new("RESTART"), TextFont::from_font_size(14.0), TextColor(Color::WHITE)))
+            .observe(|_: On<Pointer<Press>>, mut touch: ResMut<Touch>| {
+                touch.tapped.insert(Restart);
+            });
+        });
+}
+
+/// Shows the buttons on touch devices and lights up the ones being held.
+fn touch_ui(touch: Res<Touch>, mut root: Single<&mut Node, With<TouchRoot>>, mut buttons: Query<(&TouchButton, &mut BackgroundColor)>) {
+    root.display = if touch.on { Display::Flex } else { Display::None };
+    for (button, mut color) in &mut buttons {
+        let alpha = if touch.held.contains(&button.0) { 0.7 } else { 0.35 };
+        color.0 = Color::srgba(0.0, 0.0, 0.0, alpha);
+    }
 }
