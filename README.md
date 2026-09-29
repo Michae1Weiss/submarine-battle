@@ -6,7 +6,7 @@ Low-poly U-boat shooting PoC made with [Bevy](https://bevy.org) 0.19. Sink the g
 ## Controls
 | Key | Action |
 |---|---|
-| `W` / `S` | engine: reverse, stop, slow, mid, full |
+| `W` / `S` | engine: reverse, stop, slow, mid, full (`X` = stop) |
 | `A` / `D` | rudder (stays where you leave it), `C` centres it |
 | Arrows | turn and elevate the gun (red disc = where the shell lands) |
 | `Space` | shell (3 hits kill, surfaced only) |
@@ -17,6 +17,8 @@ Low-poly U-boat shooting PoC made with [Bevy](https://bevy.org) 0.19. Sink the g
 Click the game window once so it gets keyboard focus.
 
 On phones and tablets on-screen buttons appear for the same actions (best in landscape). You can steer and fire at the same time.
+
+Fullscreen: iPad and Android get a FULLSCREEN button. iPhone Safari has no fullscreen for web pages, so the button explains it: Share > Add to Home Screen, then open the game from the new icon (it starts without browser bars).
 
 ## Run
 ```bash
@@ -39,9 +41,12 @@ git worktree add ../submarine-battle-gh-pages gh-pages
 # every deploy
 SRC=target/bevy_web/web-release/submarine-battle
 DEST=../submarine-battle-gh-pages
-rm -rf "$DEST"/build "$DEST"/assets && cp -r "$SRC"/. "$DEST"/
+( cd "$DEST" && find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .nojekyll -exec rm -rf {} + )
+cp -r "$SRC"/. "$DEST"/
 ( cd "$DEST" && git add -A && git commit -m "ops: deploy web build" && git push )
 ```
+
+The page is `web/index.html` (custom: fullscreen button, iPhone home-screen tags) plus `web/manifest.webmanifest`; `bevy build` copies both into the bundle.
 
 ## Models
 Blender scripts live in `art/blender` (needs [Blender](https://www.blender.org)); they write to `assets/models`.

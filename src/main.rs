@@ -25,6 +25,7 @@ const TRUNNION: Vec3 = Vec3::new(0.42, 0.265, 0.0);
 const BARREL: f32 = 0.31;
 // Engine telegraph: reverse, stop, slow, mid, full.
 const THROTTLE: [(&str, f32); 5] = [("REVERSE", -1.0), ("STOP", 0.0), ("SLOW", 1.0), ("MID", 2.0), ("FULL", 3.2)];
+const STOP: usize = 1; // index of "STOP" in THROTTLE
 const ENEMIES: [(f32, f32, f32); 8] = [
     (14.0, -8.0, 0.5),
     (-12.0, 10.0, 2.0),
@@ -81,7 +82,7 @@ struct Player {
 impl Default for Player {
     fn default() -> Self {
         Self {
-            throttle: 1,
+            throttle: STOP,
             speed: 0.0,
             yaw: 0.0,
             rudder: 0.0,
@@ -294,6 +295,7 @@ fn find_torpedo_prop(ready: On<WorldInstanceReady>, children: Query<&Children>, 
 struct Controls {
     faster: bool,
     slower: bool,
+    stop: bool,
     rudder: f32, // +1 left
     centre: bool,
     gun_yaw: f32, // +1 left
@@ -308,6 +310,7 @@ struct Controls {
 enum Action {
     Faster,
     Slower,
+    Stop,
     RudderLeft,
     RudderRight,
     Centre,
@@ -365,6 +368,7 @@ fn read_input(
     *c = Controls {
         faster: keys.just_pressed(KeyCode::KeyW) || tap(Action::Faster),
         slower: keys.just_pressed(KeyCode::KeyS) || tap(Action::Slower),
+        stop: keys.just_pressed(KeyCode::KeyX) || tap(Action::Stop),
         rudder: (key(KeyCode::KeyA) - key(KeyCode::KeyD) + held(Action::RudderLeft) - held(Action::RudderRight)).clamp(-1.0, 1.0),
         centre: keys.just_pressed(KeyCode::KeyC) || tap(Action::Centre),
         gun_yaw: (key(KeyCode::ArrowLeft) - key(KeyCode::ArrowRight) + held(Action::GunLeft) - held(Action::GunRight)).clamp(-1.0, 1.0),
@@ -385,6 +389,9 @@ fn drive(c: Res<Controls>, time: Res<Time>, player: Single<(&mut Player, &mut Tr
     }
     if c.slower {
         p.throttle = p.throttle.saturating_sub(1);
+    }
+    if c.stop {
+        p.throttle = STOP;
     }
     let dive_factor = if p.dived { 0.7 } else { 1.0 };
     let want = THROTTLE[p.throttle].1 * dive_factor;
@@ -634,7 +641,7 @@ fn hud(
     let help = match (touch.on, window.width() < window.height()) {
         (true, true) => "Rotate your device to landscape\n",
         (true, false) => "",
-        _ => "W/S engine  A/D rudder (C centre)  arrows gun  SPACE shell  T torpedo  F dive  R restart\n",
+        _ => "W/S engine (X stop)  A/D rudder (C centre)  arrows gun  SPACE shell  T torpedo  F dive  R restart\n",
     };
     text.0 = format!(
         "{help}Enemies: {left}   Engine: {throttle}   Rudder: {side} {:.0}%   {status}",
@@ -646,8 +653,8 @@ fn touch_button(row: &mut ChildSpawnerCommands, label: &str, action: Action) {
     row.spawn((
         TouchButton(action),
         Node {
-            width: Val::VMin(16.0),
-            height: Val::VMin(11.0),
+            width: Val::VMin(19.0),
+            height: Val::VMin(12.0),
             margin: UiRect::all(Val::Px(3.0)),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
@@ -702,7 +709,7 @@ fn spawn_touch_ui(commands: &mut Commands) {
             Pickable::IGNORE,
         ))
         .with_children(|root| {
-            touch_panel(root, &[("ENGINE", &[("-", Slower), ("+", Faster)]), ("RUDDER", &[("<", RudderLeft), ("C", Centre), (">", RudderRight)])]);
+            touch_panel(root, &[("ENGINE", &[("-", Slower), ("STOP", Stop), ("+", Faster)]), ("RUDDER", &[("<", RudderLeft), ("C", Centre), (">", RudderRight)])]);
             touch_panel(root, &[("", &[("SHELL", Shell), ("TORPEDO", Torpedo), ("DIVE", Dive)]), ("GUN", &[("<", GunLeft), ("^", GunUp), ("v", GunDown), (">", GunRight)])]);
             root.spawn((
                 TouchButton(Restart),
